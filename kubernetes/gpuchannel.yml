@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ffmpeg
+  labels:
+    app: ffmpeg-deployment
+spec:
+  selector:
+    matchLabels:
+      service: ffmpeg
+  template:
+    metadata:
+      labels:
+        app: ffmpeg-deployment
+        service: ffmpeg
+    spec:
+      tolerations:
+        - key: type
+          operator: Equal
+          value: backend
+          effect: NoSchedule
+        - key: sku
+          operator: Equal
+          value: gpu
+          effect: NoSchedule
+      containers:
+        - name: ffmpeg
+          image: livestream.azurecr.io/ffmpeg
+          imagePullPolicy: Always
+          resources:
+            limits:
+              cpu: 4
+              memory: 8Gi
+              nvidia.com/gpu: 1
+          ports:
+            - containerPort: 80
+              protocol: TCP
+          env:
+            - name: ASPNETCORE_URLS
+              value: http://+:80

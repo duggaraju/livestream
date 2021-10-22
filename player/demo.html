@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+    <meta charset="utf-8">
+    <title>Livestream Test Player</title>
+    <meta name="description" content="">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:;">
+
+    <!-- Shaka public builds.       -->
+    <script src="https://ajax.googleapis.com/ajax/libs/shaka-player/3.1.1/shaka-player.ui.debug.js"></script>   
+    <link rel="stylesheet" type="text/css" href="https://ajax.googleapis.com/ajax/libs/shaka-player/3.1.1/controls.css">
+    <!-- Your application source: -->
+    <script src="shaka.js"></script>
+
+    <style>
+
+    #shaka {
+        height: 720px;
+        width: 1280px;
+    }
+
+    .row {
+        margin-top: 10px;
+        margin-left: 10px;
+        display: flex;
+        flex-direction: row;
+    }
+    </style>
+</head>
+<body>
+    <h2>Shaka Reference player</h2>
+    <div class="row">
+        <div id="shaka" data-shaka-player-container >
+            <video data-shaka-player muted id="camera" autoplay playsinline crossorigin="anonymous" > </video>
+        </div>
+    </div>
+    <div class="row">
+        <label for="url">Playback URL:</label>
+        <input type="url" id="url" list="urls" size="100" autocomplete="off" placeholder="enter URL http://cluster/playback/channel/dash.mpd or hls.m3u8" value="http://cluster/playback/channel/hls.m3u8" >
+        </input>
+        <button id="play">Play</button>
+    </div>
+</body>
+</html>
