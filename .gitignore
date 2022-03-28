@@ -53,3 +53,4 @@ typings/
 # .net core files
 bin/
 obj/
+.vs/

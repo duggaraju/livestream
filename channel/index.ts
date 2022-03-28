@@ -6,6 +6,7 @@ import EventEmitter from 'events';
 import yargs from 'yargs';
 /// required modules
 import { ServerResponse, IncomingMessage, createServer } from 'http';
+import LRUCache from 'lru-cache';
 
 var argv = yargs(process.argv.slice(2))
   .option('gpu', {
@@ -113,7 +114,10 @@ const videoStreams = Array.from(Array(resolutions.length).keys()).join();
 const audioStream = resolutions.length;
 command
   .input(url)
-  //.inputOptions([ '-report' ])
+  .inputOptions([ 
+    '-fflags', 'nobuffer',
+    //'-report'
+   ])
   .inputOption(gpu ? getNvencInputOptions() : [])
   .audioCodec('aac')
   .audioBitrate('64k')
@@ -121,15 +125,16 @@ command
   .outputOption(gpu ? getNvencOptions() : getX264Options())
   .outputOption(
     '-map', '0:a',
-    '-g', '30',
-    '-keyint_min', '30',
+    '-g', '60',
+    '-keyint_min', '60',
     '-sc_threshold', '0',
+    '-use_template', '1',
     '-use_timeline', '0',
     '-utc_timing_url', 'http://time.akamai.com',
     '-format_options', 'movflags=cmaf',
-    '-frag_type', 'duration',
+    '-frag_type', 'every_frame',
     //    '-seg_duration', '4',
-    '-frag_duration', '1',
+    //'-frag_duration', '1',
     '-ldash', '1',
     //    '-lhls 1',
     '-streaming', '1',
@@ -138,9 +143,13 @@ command
     '-export_side_data', 'prft',
     '-write_prft', '1',
     '-extra_window_size', '35',
+    '-min_playback_rate', '0.75',
+    '-max_playback_rate', '1.25',
+    '-target_latency', '1.5',
     '-hls_playlist', '1',
     '-hls_master_name', 'hls.m3u8',
-    '-adaptation_sets', `id=0,seg_duration=2,frag_duration=1,streams=${videoStreams} id=1,seg_duration=2,frag_type=none,streams=${audioStream}`,
+    '-http_persistent', '1',
+    '-adaptation_sets', `id=0,seg_duration=2,streams=v id=1,seg_duration=2,streams=a`,
   );
 
 console.log(`running ${command}`);
@@ -182,15 +191,24 @@ class CacheElem extends EventEmitter {
 /// globals
 const data_root = media_root;                /// root directory for all data
 const server_port_ingest = 80;       /// server listening port for ingest
-const stream_cache = new Map<string, CacheElem>(); /// global data cache for incoming ingests
+//const stream_cache = new Map<string, CacheElem>(); /// global data cache for incoming ingests
+const options: LRUCache.Options<string, CacheElem>  = {
+  max: 100,
+  maxSize: 10000000,
+  sizeCalculation: (value, key) => {
+    return value.buffer_list.length;
+  }
 
+};
+const stream_cache = new LRUCache<string, CacheElem>(options)
 /// checks GET or POST request URLs for sanity to avoid spammers & crashes
 function check_sanity(url: string) {
   return url.startsWith('/ingest/') || url.startsWith('/')
 }
 
 /// sends the no such file response (http 404)
-function send_404(res: ServerResponse) {
+function send_404(res: ServerResponse, file: string) {
+  console.log(`Sending 404 NOT FOUND **** ${file}`);
   res.statusCode = 404;
   res.statusMessage = "Not found";
   res.end();
@@ -210,7 +228,7 @@ function send_500(res: ServerResponse) {
 function send_fixed_length(res: ServerResponse, content_type: string, filename: string) {
   fs.readFile(filename, (err, data) => {
     if (err) {
-      send_404(res);
+      send_404(res, filename);
       throw err;
     } else {
       res.writeHead(200, {
@@ -234,7 +252,7 @@ function send_chunked(res: ServerResponse, content_type: string, filename: strin
   stream.on('error', (err) => {
     console.log(`404 bad file ${filename}`);
 
-    send_404(res);
+    send_404(res, filename);
   });
 
   stream.once('readable', () => {
@@ -269,9 +287,14 @@ function send_chunked_cached(res: ServerResponse, content_type: string, filename
     res.write(current);
 
     if (cache_elem.ended) {
+      console.log(`No chunk transfer encoding response complete ${filename}`)
       res.end();
     } else {
       cache_elem.res.push(res);
+      cache_elem.on('end', () => {
+        console.log(`ending CTE for ${filename}`);
+        res.end();
+      })
       cache_elem.on('data', (chunk: any) => {
         //console.log(`data event for ${filename}`);
         res.write(chunk);
@@ -290,7 +313,7 @@ function request_listener(req: IncomingMessage, res: ServerResponse) {
     //console.log('=====', 'Headers:', req.headers, '=====');
   }
   if (!check_sanity(url)) {
-    console.log(`ReJECT ${req.method} ${req.url}`);
+    console.log(`REJECT ${req.method} ${req.url}`);
   } else if (req.method == 'GET') {
     const suffix_idx = url.lastIndexOf('.');
     const suffix = url.slice(suffix_idx, url.length);
@@ -309,7 +332,7 @@ function request_listener(req: IncomingMessage, res: ServerResponse) {
         break;
       default:
         console.log(`404 bad suffix ${suffix}`);
-        send_404(res);
+        send_404(res, filename);
         break;
     }
   } else if (req.method == 'POST') { // check for POST method, ignore others
@@ -319,7 +342,7 @@ function request_listener(req: IncomingMessage, res: ServerResponse) {
 
     console.log(`POST ${req.url}`);
 
-    const file_stream = fs.createWriteStream(filename);
+    const file_stream = fs.createWriteStream(filename + '.tmp');
     const file_cache = new CacheElem();
 
     file_stream.on('error', (err) => {
@@ -335,7 +358,7 @@ function request_listener(req: IncomingMessage, res: ServerResponse) {
         file_cache.res[0].end(); // end transmission on first response
         file_cache.res.shift();  // delete response from array
       }
-      stream_cache.delete(filename);
+      //stream_cache.delete(filename);
     });
 
 
@@ -348,8 +371,9 @@ function request_listener(req: IncomingMessage, res: ServerResponse) {
     //req.on('close', () => { // not every stream emits 'close', so rely on 'end' event
     //});
     req.on('end', () => {
-      file_cache.emit('end');
       file_stream.end();
+      fs.renameSync(filename + '.tmp', filename);
+      file_cache.emit('end');
     });
   } else if (req.method == 'DELETE') { // check for DELETE method
     const prefix = '/ingest';
