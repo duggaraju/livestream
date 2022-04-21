@@ -9,11 +9,23 @@ import { ServerResponse, IncomingMessage, createServer } from 'http';
 import LRUCache from 'lru-cache';
 
 var argv = yargs(process.argv.slice(2))
+  .option('input', {
+    alias: 'i',
+    type: 'string',
+    description: 'input URL/file',
+    default: 'rtmp://localhost/live/test'
+  })
   .option('gpu', {
     alias: 'g',
     default: false,
     description: 'gpu to use',
     type: 'boolean',
+    demandOption: false
+  })
+  .option('webrtc', {
+    alias: 'w',
+    type: 'string',
+    description: 'Web RTC endpoint to use',
     demandOption: false
   })
   .help()
@@ -23,10 +35,7 @@ console.log(argv);
 
 
 const media_root = process.env['MEDIA_ROOT'] || (process.platform === 'win32' ? '\\media' : '/media');
-const rtmp_source = process.env['RTMP_SOURCE'] || '127.0.0.1'
-const stream_key = process.env['STREAM_KEY'] || 'test'
 const port = 80;
-const gpu = argv.gpu;
 
 declare interface CacheEleme {
   on(event: 'end', listener: () => void): this;
@@ -40,7 +49,6 @@ if (!fs.existsSync(media_root)) {
 
 console.info(`ffmpeg path is ${ffmpegpath}`);
 //ffmpeg.setFfmpegPath(ffmpegpath);  
-const url = `rtmp://${rtmp_source}/live/${stream_key}`;
 const command = ffmpeg({
   logger: console
 });
@@ -48,16 +56,19 @@ const command = ffmpeg({
 const resolutions = [
   {
     resolution: '640x360',
-    bitrate: '500K'
+    bitrate: '500K',
+    label: 'low'
   },
   {
     resolution: '960x540',
-    bitrate: '1500K'
+    bitrate: '1500K',
+    label: 'medium'
 
   },
   {
     resolution: '1280x760',
-    bitrate: '2500K'
+    bitrate: '2500K',
+    label: 'high'
   }
 ]
 
@@ -110,24 +121,9 @@ function getNvencInputOptions(): string[] {
   ];
 }
 
-const videoStreams = Array.from(Array(resolutions.length).keys()).join();
-const audioStream = resolutions.length;
-command
-  .input(url)
-  .inputOptions([ 
-    '-fflags', 'nobuffer',
-    //'-report'
-   ])
-  .inputOption(gpu ? getNvencInputOptions() : [])
-  .audioCodec('aac')
-  .audioBitrate('64k')
-  .output(`http://localhost:${port}/ingest/dash.mpd`)
-  .outputOption(gpu ? getNvencOptions() : getX264Options())
-  .outputOption(
-    '-map', '0:a',
-    '-g', '60',
-    '-keyint_min', '60',
-    '-sc_threshold', '0',
+function addDashOutput(command: ffmpeg.FfmpegCommand, endpoint: string): void {
+
+  command.addOutputOption(
     '-use_template', '1',
     '-use_timeline', '0',
     '-utc_timing_url', 'http://time.akamai.com',
@@ -150,8 +146,42 @@ command
     '-hls_master_name', 'hls.m3u8',
     '-http_persistent', '1',
     '-adaptation_sets', `id=0,seg_duration=2,streams=v id=1,seg_duration=2,streams=a`,
+  ).
+  addOutput(endpoint);
+}
+
+function addSrtOutput(command: ffmpeg.FfmpegCommand, endpoint: string): void  {
+  const output = resolutions.map(
+    (resolution,index) => `[f=mpegts:select=a,v:${index}]srt://${endpoint}?stream=${resolution.label}`)
+  .join('|');
+  command.addOutputOption(
+    '-f', 'tee',
+  ).addOutput(
+    output
+  );
+}
+
+const videoStreams = Array.from(Array(resolutions.length).keys()).join();
+const audioStream = resolutions.length;
+command
+  .input(argv.input)
+  .inputOptions([ 
+    '-fflags', 'nobuffer',
+    //'-report'
+   ])
+  .inputOption(argv.gpu ? getNvencInputOptions() : [])
+  .audioCodec('aac')
+  .audioBitrate('64k')
+  .outputOption(argv.gpu ? getNvencOptions() : getX264Options())
+  .outputOption(
+    '-map', '0:a',
+    '-g', '60',
+    '-keyint_min', '60',
+    '-sc_threshold', '0',
   );
 
+argv.webrtc ? 
+  addSrtOutput(command, argv.webrtc) : addDashOutput(command, `http://localhost:${port}/ingest/dash.mpd`)
 console.log(`running ${command}`);
 command.on('start', (c) => {
   console.log(`Running command: ${c}`);

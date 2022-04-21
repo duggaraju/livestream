@@ -24,6 +24,7 @@ namespace KubeClient
         public async Task CreateChannelAsync(string name, string rtmp_source)
         {
             bool isGpu = name.StartsWith("gpu");
+            var srt = name.StartsWith("wrtc");
             var tolerations = new List<V1Toleration>
             {
                 new V1Toleration
@@ -47,12 +48,16 @@ namespace KubeClient
 
             var limits = new Dictionary<string, ResourceQuantity>
             {
-                { "cpu", new ResourceQuantity("3.8") },
                 { "memory", new ResourceQuantity("8Gi") }
             };
             if (isGpu)
             {
+                limits.Add("cpu", new ResourceQuantity("2"));
                 limits.Add("nvidia.com/gpu", new ResourceQuantity("1"));
+            }
+            else 
+            {
+                limits.Add("cpu", new ResourceQuantity("3.8"));
             }
 
             var deployment = new V1Deployment
@@ -112,21 +117,15 @@ namespace KubeClient
                                     {
                                         Limits = limits
                                     },
-                                    Env = new List<V1EnvVar>
-                                    {
-                                        new V1EnvVar
-                                        {
-                                            Name = "STREAM_KEY",
-                                            Value = name
-                                        },
-                                        new V1EnvVar
-                                        {
-                                            Name = "RTMP_SOURCE",
-                                            Value = rtmp_source
-                                        }
-                                    },
                                     Command = new[] { "node" },
-                                    Args = new[] { "index.js", "--gpu", isGpu.ToString().ToLower() }
+                                    Args = new[] 
+                                    {
+                                        "index.js",
+                                        "-i",
+                                        $"rtmp://{rtmp_source}/live/{name}",
+                                        "--gpu",
+                                        isGpu.ToString().ToLower()
+                                    }
                                 }
                             }
                         }
